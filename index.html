@@ -630,13 +630,15 @@
     <script>
         // ========== 配置 ==========
         const CONFIG = {
-            // GitHub 配置 - 修改这里
-            OWNER: 'CangLing-Cerulean',           // 你的 GitHub 用户名
-            REPO: 'canglingling',      // 你的仓库名
-            TOKEN: '',                            // 留空，使用无 Token 模式（公开仓库）
-            
-            // 管理员密码
-            ADMIN_PASSWORD: 'cangling',
+            OWNER: 'CangLing-Cerulean',
+            REPO: 'canglingling.github.io',
+            TOKEN: 'TOKEN_PLACEHOLDER',  // ← 这里会被 Actions 自动替换
+            ADMIN_PASSWORD: 'cangling123',
+            LABEL_CARDS: 'data-cards',
+            LABEL_GALLERY: 'data-gallery',
+            LABEL_COMMENTS: 'data-comments'
+        };
+
             
             // 数据标签（用于分类 Issues）
             LABEL_CARDS: 'data-cards',
