@@ -702,36 +702,39 @@
         };
 
         async function init() {
-            updateStatus('检查配置...');
+            updateStatus('加载中...');
             
-            // 先加载本地缓存，确保有数据可显示
+            // 先尝试加载本地缓存，快速显示
             loadFromLocal();
-            
-            if (CONFIG.TOKEN === 'TOKEN_PLACEHOLDER') {
-                updateStatus('⚠️ Token 未配置');
+            if (cards.length > 0 || gallery.length > 0 || comments.length > 0) {
                 renderAll();
-                hideLoading();
-                showError('配置错误，请刷新或联系管理员');
-                return;
             }
             
-            updateStatus('连接 GitHub...');
-            try {
-                await loadAllData();
-                renderAll();
-                hideLoading();
-            } catch (error) {
-                console.error('初始化失败:', error);
-                // 已经有本地缓存了，直接渲染
-                renderAll();
-                hideLoading();
-                
-                if (cards.length === 0) {
-                    showError('加载失败: ' + error.message);
-                } else {
-                    showToast('⚠️ 使用本地缓存数据');
+            // 再尝试云端同步
+            const hasToken = CONFIG.TOKEN && 
+                             CONFIG.TOKEN !== 'TOKEN_PLACEHOLDER' && 
+                             CONFIG.TOKEN.startsWith('ghp_');
+            
+            if (hasToken) {
+                updateStatus('同步云端数据...');
+                try {
+                    await loadAllData();
+                    renderAll();
+                    saveToLocal();
+                    showToast('✅ 云端同步完成');
+                } catch (error) {
+                    console.error('云端同步失败:', error);
+                    if (cards.length === 0) {
+                        showError('云端同步失败: ' + error.message);
+                    } else {
+                        showToast('⚠️ 使用本地缓存');
+                    }
                 }
+            } else if (cards.length === 0) {
+                showError('配置错误，请刷新或联系管理员');
             }
+            
+            hideLoading();
         }
 
         function updateStatus(text) {
@@ -741,6 +744,10 @@
 
         function showError(message) {
             const container = document.querySelector('.container');
+            // 避免重复添加错误提示
+            const existing = container.querySelector('.error-message');
+            if (existing) existing.remove();
+            
             const errorDiv = document.createElement('div');
             errorDiv.className = 'error-message';
             errorDiv.innerHTML = message;
