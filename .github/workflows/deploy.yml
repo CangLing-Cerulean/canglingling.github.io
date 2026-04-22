@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -16,28 +16,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Inject Token
-        run: |
-          node -e "
-            const fs = require('fs');
-            const token = process.env.GH_TOKEN || 'TOKEN_PLACEHOLDER';
-            let content = fs.readFileSync('index.html', 'utf8');
-            content = content.replace(/TOKEN_PLACEHOLDER/g, token);
-            fs.writeFileSync('index.html', content);
-            console.log('Token injected:', content.includes('ghp_') ? 'success' : 'failed');
-          "
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-
-      - name: Verify Token
-        run: |
-          if grep -q "TOKEN_PLACEHOLDER" index.html; then
-            echo "ERROR: Token injection failed!"
-            exit 1
-          else
-            echo "SUCCESS: Token injected"
-          fi
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -49,3 +27,4 @@ jobs:
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
+
