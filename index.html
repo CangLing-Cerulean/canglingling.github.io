@@ -731,11 +731,60 @@
                 });
                 if (!response.ok) throw new Error('删除失败');
                 return await response.json();
+            },
+
+            // 上传文件到仓库
+            async uploadFile(path, content, message) {
+                const url = `https://api.github.com/repos/${CONFIG.OWNER}/${CONFIG.REPO}/contents/${path}`;
+                
+                // 先获取当前文件的 sha（如果存在）
+                let sha = null;
+                try {
+                    const getResponse = await fetch(url, {
+                        headers: {
+                            'Authorization': `token ${CONFIG.TOKEN}`
+                        }
+                    });
+                    if (getResponse.ok) {
+                        const data = await getResponse.json();
+                        sha = data.sha;
+                    }
+                } catch (e) {
+                    // 文件不存在，忽略错误
+                }
+
+                const body = {
+                    message: message || 'Upload image',
+                    content: content, // Base64 编码的内容
+                    branch: 'main'
+                };
+                
+                if (sha) {
+                    body.sha = sha;
+                }
+
+                const response = await fetch(url, {
+                    method: 'PUT',
+                    headers: {
+                        'Accept': 'application/vnd.github.v3+json',
+                        'Content-Type': 'application/json',
+                        'Authorization': `token ${CONFIG.TOKEN}`
+                    },
+                    body: JSON.stringify(body)
+                });
+                
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.message || `HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                return data.content.download_url; // 返回图片 URL
             }
         };
 
-        // 图片压缩
-        async function compressImage(file, maxWidth = 800, maxHeight = 800, quality = 0.7) {
+        // 图片压缩 - 更激进的压缩
+        async function compressImage(file, maxWidth = 600, maxHeight = 600, quality = 0.5) {
             return new Promise((resolve, reject) => {
                 const img = new Image();
                 img.onload = () => {
@@ -743,21 +792,39 @@
                     let width = img.width;
                     let height = img.height;
                     
-                    if (width > maxWidth) {
-                        height *= maxWidth / width;
-                        width = maxWidth;
-                    }
-                    if (height > maxHeight) {
-                        width *= maxHeight / height;
-                        height = maxHeight;
-                    }
+                    // 计算缩放比例
+                    const scale = Math.min(
+                        maxWidth / width,
+                        maxHeight / height,
+                        1
+                    );
+                    
+                    width *= scale;
+                    height *= scale;
                     
                     canvas.width = width;
                     canvas.height = height;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
                     
-                    const dataUrl = canvas.toDataURL('image/jpeg', quality);
+                    // 尝试 JPEG 格式，质量 0.5
+                    let dataUrl = canvas.toDataURL('image/jpeg', quality);
+                    
+                    // 如果还是太大，进一步压缩
+                    let attempts = 0;
+                    while (dataUrl.length > 40000 && attempts < 3) { // 限制 40KB
+                        quality *= 0.7;
+                        maxWidth *= 0.8;
+                        maxHeight *= 0.8;
+                        
+                        const newCanvas = document.createElement('canvas');
+                        newCanvas.width = maxWidth;
+                        newCanvas.height = maxHeight;
+                        newCanvas.getContext('2d').drawImage(img, 0, 0, maxWidth, maxHeight);
+                        dataUrl = newCanvas.toDataURL('image/jpeg', quality);
+                        attempts++;
+                    }
+                    
                     resolve(dataUrl);
                 };
                 img.onerror = reject;
@@ -771,11 +838,7 @@
         async function init() {
             updateStatus('加载中...');
             
-            loadFromLocal();
-            if (cards.length > 0 || gallery.length > 0 || comments.length > 0) {
-                renderAll();
-            }
-            
+            // 强制从 GitHub 加载，不用本地缓存
             const hasToken = CONFIG.TOKEN && 
                              CONFIG.TOKEN !== 'TOKEN_PLACEHOLDER' && 
                              CONFIG.TOKEN.startsWith('ghp_');
@@ -785,17 +848,26 @@
                 try {
                     await loadAllData();
                     renderAll();
-                    saveToLocal();
+                    saveToLocal(); // 同步完成后保存到本地作为备份
                 } catch (error) {
                     console.error('云端同步失败:', error);
+                    // 云端失败时尝试本地缓存
+                    loadFromLocal();
+                    renderAll();
+                    
                     if (cards.length === 0) {
                         showError('云端同步失败: ' + error.message);
                     } else {
                         showToast('⚠️ 使用本地缓存');
                     }
                 }
-            } else if (cards.length === 0) {
-                showError('配置错误，请刷新或联系管理员');
+            } else {
+                // 无 Token，只能用本地缓存
+                loadFromLocal();
+                renderAll();
+                if (cards.length === 0) {
+                    showError('配置错误，请刷新或联系管理员');
+                }
             }
             
             hideLoading();
@@ -884,8 +956,13 @@
                 hasError = true;
             }
 
-            saveToLocal();
-            
+            // 按 order 标记排序
+            cards.sort((a, b) => {
+                const orderA = (a.content.match(/<!-- order:(\d+) -->/) || [0, 999])[1];
+                const orderB = (b.content.match(/<!-- order:(\d+) -->/) || [0, 999])[1];
+                return parseInt(orderA) - parseInt(orderB);
+            });
+
             if (hasError && cards.length === 0 && gallery.length === 0 && comments.length === 0) {
                 throw new Error('所有数据加载失败');
             }
@@ -998,21 +1075,24 @@
                 renderCards();
                 showToast('顺序已更新');
                 
-                // 同步到云端：更新所有卡片的顺序标签
+                // 同步到云端
                 try {
                     for (let i = 0; i < cards.length; i++) {
                         const c = cards[i];
-                        // 添加顺序信息到内容末尾
-                        const orderMarker = `\n\n<!-- order:${i} -->`;
-                        if (!c.content.includes('<!-- order:')) {
-                            await GitHubAPI.updateIssue(c.issueNumber, c.title, c.content + orderMarker);
+                        const orderMarker = `<!-- order:${i} -->`;
+                        let newContent;
+                        if (c.content.includes('<!-- order:')) {
+                            newContent = c.content.replace(/<!-- order:\d+ -->/, orderMarker);
                         } else {
-                            const newContent = c.content.replace(/<!-- order:\d+ -->/, `<!-- order:${i} -->`);
-                            await GitHubAPI.updateIssue(c.issueNumber, c.title, newContent);
+                            newContent = c.content + '\n\n' + orderMarker;
                         }
+                        await GitHubAPI.updateIssue(c.issueNumber, c.title, newContent);
+                        c.content = newContent;
                     }
+                    saveToLocal();
                 } catch (err) {
                     console.error('同步顺序失败:', err);
+                    showToast('⚠️ 本地顺序已保存，云端同步失败');
                 }
             });
         }
@@ -1036,7 +1116,7 @@
                         <button class="btn btn-danger btn-sm" onclick="deleteCard(${card.issueNumber})">删除</button>
                     </div>
                     <h3 contenteditable="${isAdmin}" onblur="saveCard(${card.issueNumber}, 'title', this.innerText)">${escapeHtml(card.title)}</h3>
-                    <p contenteditable="${isAdmin}" onblur="saveCard(${card.issueNumber}, 'content', this.innerText)">${escapeHtml(card.content)}</p>
+                    <p contenteditable="${isAdmin}" onblur="saveCard(${card.issueNumber}, 'content', this.innerText)">${escapeHtml(card.content.replace(/<!-- order:\d+ -->/g, ''))}</p>
                 `;
                 container.appendChild(cardEl);
             });
@@ -1060,15 +1140,21 @@
                 return;
             }
             
-            const newTitle = field === 'title' ? value.trim() : card.title;
-            const newContent = field === 'content' ? value.trim() : card.content;
+            const cleanValue = value.replace(/<!-- order:\d+ -->/g, '').trim();
+            const newTitle = field === 'title' ? cleanValue : card.title;
+            const newContent = field === 'content' ? cleanValue : card.content.replace(/<!-- order:\d+ -->/g, '');
             
-            if (newTitle === card.title && newContent === card.content) return;
+            // 保留 order 标记
+            const orderMatch = card.content.match(/<!-- order:(\d+) -->/);
+            const orderMarker = orderMatch ? `<!-- order:${orderMatch[1]} -->` : '';
+            const finalContent = newContent + (orderMarker ? '\n\n' + orderMarker : '');
+            
+            if (newTitle === card.title && finalContent === card.content) return;
             
             try {
-                await GitHubAPI.updateIssue(card.issueNumber, newTitle, newContent);
+                await GitHubAPI.updateIssue(card.issueNumber, newTitle, finalContent);
                 card.title = newTitle;
-                card.content = newContent;
+                card.content = finalContent;
                 saveToLocal();
                 showToast('已保存');
             } catch (error) {
@@ -1108,7 +1194,9 @@
             }
 
             try {
-                const issue = await GitHubAPI.createIssue(title, content, [CONFIG.LABEL_CARDS]);
+                const order = cards.length;
+                const contentWithOrder = content + `\n\n<!-- order:${order} -->`;
+                const issue = await GitHubAPI.createIssue(title, contentWithOrder, [CONFIG.LABEL_CARDS]);
                 
                 cards.push({
                     id: issue.number,
@@ -1154,17 +1242,38 @@
                 
                 try {
                     showToast('正在压缩图片...');
-                    const compressed = await compressImage(file, 800, 800, 0.7);
+                    const compressed = await compressImage(file);
                     
-                    // 检查压缩后大小
-                    const sizeInKB = Math.round(compressed.length * 0.75 / 1024);
-                    if (sizeInKB > 50) {
-                        showToast(`图片太大 (${sizeInKB}KB)，继续压缩...`);
+                    // 检查大小
+                    const base64Length = compressed.length;
+                    const sizeInKB = Math.round(base64Length * 0.75 / 1024);
+                    console.log('Compressed size:', sizeInKB, 'KB');
+                    
+                    if (sizeInKB > 100) {
+                        showToast(`图片太大 (${sizeInKB}KB)，跳过`);
+                        continue;
                     }
                     
-                    const title = `img_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                    showToast('正在上传到 GitHub...');
                     
-                    await GitHubAPI.createIssue(title, compressed, [CONFIG.LABEL_GALLERY]);
+                    // 提取 Base64 内容（去掉 data:image/jpeg;base64, 前缀）
+                    const base64Content = compressed.split(',')[1];
+                    
+                    // 生成文件名
+                    const ext = file.name.split('.').pop() || 'jpg';
+                    const filename = `img_${Date.now()}_${Math.random().toString(36).substr(2, 8)}.${ext}`;
+                    const path = `images/${filename}`;
+                    
+                    // 上传到仓库
+                    const imageUrl = await GitHubAPI.uploadFile(path, base64Content, `Upload ${filename}`);
+                    
+                    // 创建 Issue 记录
+                    await GitHubAPI.createIssue(
+                        `image_${filename}`,
+                        imageUrl,
+                        [CONFIG.LABEL_GALLERY]
+                    );
+                    
                     await loadAllData();
                     renderGallery();
                     showToast('图片上传成功');
