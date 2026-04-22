@@ -644,9 +644,9 @@
             async getIssues(label) {
                 const url = `https://api.github.com/repos/${CONFIG.OWNER}/${CONFIG.REPO}/issues?labels=${label}&state=all&per_page=100`;
                 const response = await fetch(url, {
-                    headers: {
+                    headers: CONFIG.TOKEN !== 'TOKEN_PLACEHOLDER' ? {
                         'Authorization': `token ${CONFIG.TOKEN}`
-                    }
+                    } : {}
                 });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 return await response.json();
@@ -738,69 +738,63 @@
         }
 
         async function loadAllData() {
-            try {
-                const cardIssues = await GitHubAPI.getIssues(CONFIG.LABEL_CARDS);
-                cards = cardIssues
-                    .filter(issue => issue.state === 'open')
-                    .map(issue => ({
-                        id: issue.number,
-                        title: issue.title,
-                        content: issue.body || '',
-                        issueNumber: issue.number
-                    }));
-            } catch (e) {
-                console.log('GitHub 卡片加载失败:', e.message);
-            }
+            // 清空数组，避免重复
+            cards = [];
+            gallery = [];
+            comments = [];
 
-            try {
-                const galleryIssues = await GitHubAPI.getIssues(CONFIG.LABEL_GALLERY);
-                gallery = galleryIssues
-                    .filter(issue => issue.state === 'open')
-                    .map(issue => ({
-                        url: issue.body,
-                        issueNumber: issue.number
-                    }))
-                    .filter(item => item.url);
-            } catch (e) {
-                console.log('GitHub 图片加载失败:', e.message);
-            }
+            if (CONFIG.TOKEN !== 'TOKEN_PLACEHOLDER') {
+                try {
+                    const cardIssues = await GitHubAPI.getIssues(CONFIG.LABEL_CARDS);
+                    cards = cardIssues
+                        .filter(issue => issue.state === 'open')
+                        .map(issue => ({
+                            id: issue.number,
+                            title: issue.title,
+                            content: issue.body || '',
+                            issueNumber: issue.number
+                        }));
+                } catch (e) {
+                    console.log('GitHub 卡片加载失败:', e.message);
+                }
 
-            try {
-                const commentIssues = await GitHubAPI.getIssues(CONFIG.LABEL_COMMENTS);
-                comments = commentIssues
-                    .filter(issue => issue.state === 'open')
-                    .map(issue => {
-                        try {
-                            const data = JSON.parse(issue.body);
-                            return {
-                                name: data.name,
-                                text: data.text,
-                                time: data.time,
-                                issueNumber: issue.number
-                            };
-                        } catch {
-                            return null;
-                        }
-                    })
-                    .filter(Boolean);
-            } catch (e) {
-                console.log('GitHub 评论加载失败:', e.message);
-            }
+                try {
+                    const galleryIssues = await GitHubAPI.getIssues(CONFIG.LABEL_GALLERY);
+                    gallery = galleryIssues
+                        .filter(issue => issue.state === 'open')
+                        .map(issue => ({
+                            url: issue.body,
+                            issueNumber: issue.number
+                        }))
+                        .filter(item => item.url);
+                } catch (e) {
+                    console.log('GitHub 图片加载失败:', e.message);
+                }
 
-            if (cards.length === 0) {
-                cards = getDefaultCards();
+                try {
+                    const commentIssues = await GitHubAPI.getIssues(CONFIG.LABEL_COMMENTS);
+                    comments = commentIssues
+                        .filter(issue => issue.state === 'open')
+                        .map(issue => {
+                            try {
+                                const data = JSON.parse(issue.body);
+                                return {
+                                    name: data.name,
+                                    text: data.text,
+                                    time: data.time,
+                                    issueNumber: issue.number
+                                };
+                            } catch {
+                                return null;
+                            }
+                        })
+                        .filter(Boolean);
+                } catch (e) {
+                    console.log('GitHub 评论加载失败:', e.message);
+                }
             }
 
             saveToLocal();
-        }
-
-        function getDefaultCards() {
-            return [
-                { id: 1, title: '这是什么地方？', content: '这里是沧翎翎的秘密基地，目前主要是展示一些瞎搞的信息。不打算自我解释，觉得没什么内容能写进去，可能以后就会改变主意了呢？' },
-                { id: 2, title: '沧翎翎是什么？', content: '沧翎翎是拥有这个网站的小兽太，专注于研究自动化、通用时域模型相关的内容，其实什么都不懂。还是一位福瑞控，最喜欢可爱的小兽太了！' },
-                { id: 3, title: '何时才能做完？', content: '沧翎翎不会写代码，不懂得如何设计界面，也不善于表达内容，可能永远也做不完！' },
-                { id: 4, title: '想认识沧翎翎？', content: '沧翎翎是超级大社恐，并且只想认识小兽太。目前不会在这里写联系方式，想认识的话就去寻找相关线索啦。' }
-            ];
         }
 
         function saveToLocal() {
@@ -811,13 +805,9 @@
             const cache = localStorage.getItem('cangling_cache');
             if (cache) {
                 const data = JSON.parse(cache);
-                cards = data.cards || getDefaultCards();
+                cards = data.cards || [];
                 gallery = data.gallery || [];
                 comments = data.comments || [];
-            } else {
-                cards = getDefaultCards();
-                gallery = [];
-                comments = [];
             }
         }
 
@@ -870,10 +860,10 @@
                 cardEl.className = `card ${isAdmin ? 'editable' : ''}`;
                 cardEl.innerHTML = `
                     <div class="card-actions">
-                        <button class="btn btn-danger btn-sm" onclick="deleteCard(${card.issueNumber || card.id})">删除</button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteCard(${card.issueNumber})">删除</button>
                     </div>
-                    <h3 contenteditable="${isAdmin}" onblur="updateCard(${card.issueNumber || card.id}, this.innerText, '${escapeHtml(card.content)}')">${card.title}</h3>
-                    <p contenteditable="${isAdmin}" onblur="updateCard(${card.issueNumber || card.id}, '${escapeHtml(card.title)}', this.innerText)">${card.content}</p>
+                    <h3 contenteditable="${isAdmin}" onblur="saveCard(${card.issueNumber}, 'title', this.innerText)">${escapeHtml(card.title)}</h3>
+                    <p contenteditable="${isAdmin}" onblur="saveCard(${card.issueNumber}, 'content', this.innerText)">${escapeHtml(card.content)}</p>
                 `;
                 container.appendChild(cardEl);
             });
@@ -888,36 +878,40 @@
             }
         }
 
-        async function updateCard(number, title, content) {
+        async function saveCard(issueNumber, field, value) {
             if (!isAdmin) return;
             
+            const card = cards.find(c => c.issueNumber === issueNumber);
+            if (!card) {
+                showToast('❌ 找不到卡片');
+                return;
+            }
+            
+            const newTitle = field === 'title' ? value.trim() : card.title;
+            const newContent = field === 'content' ? value.trim() : card.content;
+            
+            if (newTitle === card.title && newContent === card.content) return;
+            
             try {
-                if (!number || number <= 4) {
-                    const issue = await GitHubAPI.createIssue(title, content, [CONFIG.LABEL_CARDS]);
-                    await loadAllData();
-                    renderCards();
-                    showToast('已保存到云端');
-                    return;
-                }
-
-                await GitHubAPI.updateIssue(number, title, content);
-                await loadAllData();
-                renderCards();
+                await GitHubAPI.updateIssue(card.issueNumber, newTitle, newContent);
+                card.title = newTitle;
+                card.content = newContent;
+                saveToLocal();
                 showToast('已保存');
             } catch (error) {
                 showToast('❌ 保存失败: ' + error.message);
+                console.error('Save error:', error);
             }
         }
 
-        async function deleteCard(number) {
+        async function deleteCard(issueNumber) {
             if (!isAdmin) return;
             if (!confirm('确定要删除这个信息栏吗？')) return;
 
             try {
-                if (number > 4) {
-                    await GitHubAPI.closeIssue(number);
-                }
-                await loadAllData();
+                await GitHubAPI.closeIssue(issueNumber);
+                cards = cards.filter(c => c.issueNumber !== issueNumber);
+                saveToLocal();
                 renderCards();
                 showToast('已删除');
             } catch (error) {
@@ -941,8 +935,16 @@
             }
 
             try {
-                await GitHubAPI.createIssue(title, content, [CONFIG.LABEL_CARDS]);
-                await loadAllData();
+                const issue = await GitHubAPI.createIssue(title, content, [CONFIG.LABEL_CARDS]);
+                
+                cards.push({
+                    id: issue.number,
+                    title: issue.title,
+                    content: issue.body,
+                    issueNumber: issue.number
+                });
+                
+                saveToLocal();
                 renderCards();
                 closeAddCardModal();
                 showToast('添加成功');
@@ -997,13 +999,14 @@
             event.target.value = '';
         }
 
-        async function deleteImage(number, event) {
+        async function deleteImage(issueNumber, event) {
             event.stopPropagation();
             if (!confirm('确定删除这张图片？')) return;
 
             try {
-                await GitHubAPI.closeIssue(number);
-                await loadAllData();
+                await GitHubAPI.closeIssue(issueNumber);
+                gallery = gallery.filter(item => item.issueNumber !== issueNumber);
+                saveToLocal();
                 renderGallery();
                 showToast('已删除');
             } catch (error) {
@@ -1076,13 +1079,14 @@
             }
         }
 
-        async function deleteComment(number) {
+        async function deleteComment(issueNumber) {
             if (!isAdmin) return;
             if (!confirm('确定删除这条留言？')) return;
 
             try {
-                await GitHubAPI.closeIssue(number);
-                await loadAllData();
+                await GitHubAPI.closeIssue(issueNumber);
+                comments = comments.filter(c => c.issueNumber !== issueNumber);
+                saveToLocal();
                 renderComments();
                 showToast('已删除');
             } catch (error) {
@@ -1149,4 +1153,3 @@
     </script>
 </body>
 </html>
-
